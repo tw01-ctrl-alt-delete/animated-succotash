@@ -1,0 +1,259 @@
+import pandas as pd
+import numpy as np
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split, GridSearchCV
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
+
+
+# =========================
+# НАСТРОЙКИ
+# =========================
+DATA_PATH = "data.csv"
+TARGET = "ENERGY STAR Score"
+RANDOM_STATE = 42
+
+# Пороги очистки (можно менять, но для экзамена — ок)
+DROP_NA_COL_SHARE = 0.80
+DROP_ID_UNIQUE_SHARE = 0.95
+DROP_HIGH_CARD_UNIQUE = 200
+
+
+# =========================
+# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ
+# =========================
+def norm_col(name: str) -> str:
+    """Нормализует название колонки: lower + убирает лишние пробелы."""
+    return " ".join(str(name).strip().lower().split())
+
+
+def save_eda_plots(df_raw: pd.DataFrame, target_col: str) -> None:
+    """Сохраняет 2 обязательных графика EDA в PNG (без зависания plt.show())."""
+
+    # 1) Распределение цели
+    plt.figure(figsize=(7, 4))
+    sns.histplot(df_raw[target_col], kde=True)
+    plt.title(f"Распределение {target_col}")
+    plt.xlabel(target_col)
+    plt.ylabel("Count")
+    plt.tight_layout()
+    plt.savefig("eda_target_distribution.png", dpi=150)
+    plt.close()
+
+    # 2) Корреляции числовых признаков (вместе с целью)
+    num_df = df_raw.select_dtypes(include=["int64", "float64"])
+    if num_df.shape[1] >= 2:
+        corr = num_df.corr()
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(corr, cmap="coolwarm")
+        plt.title("Корреляционная матрица (числовые признаки)")
+        plt.tight_layout()
+        plt.savefig("eda_correlation_matrix.png", dpi=150)
+        plt.close()
+
+    print("EDA-графики сохранены: eda_target_distribution.png, eda_correlation_matrix.png")
+
+
+def convert_numeric_strings(X: pd.DataFrame, threshold: float = 0.70) -> pd.DataFrame:
+    """
+    Пытается превратить object-колонки в числовые, если >= threshold значений корректно конвертируются.
+    """
+    X = X.copy()
+    for col in X.columns:
+        if X[col].dtype == "object":
+            converted = pd.to_numeric(X[col], errors="coerce")
+            if converted.notna().mean() >= threshold:
+                X[col] = converted
+    return X
+
+
+def fill_missing(X: pd.DataFrame) -> pd.DataFrame:
+    """Заполняет пропуски: числа -> медиана, категории -> мода."""
+    X = X.copy()
+
+    num_cols = X.select_dtypes(include=["int64", "float64"]).columns
+    cat_cols = X.select_dtypes(include=["object", "bool"]).columns
+
+    for c in num_cols:
+        X[c] = X[c].fillna(X[c].median())
+
+    for c in cat_cols:
+        # если вдруг колонка целиком NaN — подстрахуемся
+        if X[c].notna().sum() == 0:
+            X[c] = X[c].fillna("Unknown")
+        else:
+            X[c] = X[c].fillna(X[c].mode(dropna=True)[0])
+
+    return X
+
+
+def top_feature_importance(model, feature_names, top_n=10):
+    """Печатает ТОП признаков по важности (только для моделей с feature_importances_)."""
+    if not hasattr(model, "feature_importances_"):
+        print("\nУ модели нет feature_importances_ (это нормально для некоторых моделей).")
+        return
+    imp = pd.Series(model.feature_importances_, index=feature_names).sort_values(ascending=False)
+    print(f"\nТОП-{top_n} важных признаков:")
+    print(imp.head(top_n))
+
+
+# =========================
+# 1) ЗАГРУЗКА ДАННЫХ
+# =========================
+df = pd.read_csv(DATA_PATH)
+print("Размер исходных данных:", df.shape)
+
+if TARGET not in df.columns:
+    raise ValueError(f"Не найдена целевая колонка '{TARGET}'. Проверьте data.csv")
+
+# =========================
+# 2) ОЧИСТКА И ПОДГОТОВКА ЦЕЛИ
+# =========================
+# "Not Available" -> NaN
+df = df.replace("Not Available", np.nan)
+
+# Цель -> число
+df[TARGET] = pd.to_numeric(df[TARGET], errors="coerce")
+
+# Удаляем строки без цели + дубликаты
+df = df.dropna(subset=[TARGET]).drop_duplicates().reset_index(drop=True)
+print("Размер после удаления пустой цели и дубликатов:", df.shape)
+
+print("\nСтатистика целевой переменной:")
+print(df[TARGET].describe())
+
+# =========================
+# 3) EDA (графики в файлы)
+# =========================
+save_eda_plots(df, TARGET)
+
+# =========================
+# 4) ОТДЕЛЯЕМ ПРИЗНАКИ/ЦЕЛЬ
+# =========================
+X = df.drop(columns=[TARGET]).copy()
+y = df[TARGET].copy()
+
+# Нормализуем имена колонок (чтобы надежно удалять)
+X.columns = [norm_col(c) for c in X.columns]
+
+# =========================
+# 5) УДАЛЯЕМ ЛИШНИЕ КОЛОНКИ (чтобы не раздулся one-hot)
+# =========================
+# 5.1 Удаляем колонки с >80% пропусков
+na_share = X.isna().mean()
+drop_many_na = na_share[na_share > DROP_NA_COL_SHARE].index.tolist()
+X = X.drop(columns=drop_many_na)
+print("\nУдалено колонок с >80% пропусков:", len(drop_many_na))
+
+# 5.2 Удаляем почти уникальные колонки (похоже на ID/адреса)
+drop_id = []
+n = len(X)
+for c in X.columns:
+    if X[c].nunique(dropna=True) / max(1, n) > DROP_ID_UNIQUE_SHARE:
+        drop_id.append(c)
+X = X.drop(columns=drop_id)
+print("Удалено почти уникальных колонок (ID):", len(drop_id))
+
+# 5.3 Удаляем высококардинальные категориальные колонки (слишком много категорий)
+drop_high_card = []
+for c in X.select_dtypes(include=["object"]).columns:
+    if X[c].nunique(dropna=True) > DROP_HIGH_CARD_UNIQUE:
+        drop_high_card.append(c)
+X = X.drop(columns=drop_high_card)
+print("Удалено высококардинальных категориальных колонок:", len(drop_high_card))
+
+# =========================
+# 6) ПРИВОДИМ "ЧИСЛА В СТРОКАХ" К ЧИСЛАМ
+# =========================
+X = convert_numeric_strings(X, threshold=0.70)
+
+# =========================
+# 7) ЗАПОЛНЕНИЕ ПРОПУСКОВ
+# =========================
+X = fill_missing(X)
+
+# =========================
+# 8) ONE-HOT ENCODING
+# =========================
+X = pd.get_dummies(X, drop_first=True)
+print("\nИтоговая матрица признаков X:", X.shape)
+
+# =========================
+# 9) TRAIN/TEST SPLIT
+# =========================
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=RANDOM_STATE
+)
+
+# =========================
+# 10) ОБУЧЕНИЕ 2 МОДЕЛЕЙ + ВЫБОР ЛУЧШЕЙ
+# =========================
+candidates = {
+    "RandomForest": RandomForestRegressor(
+        n_estimators=500, random_state=RANDOM_STATE, n_jobs=-1
+    ),
+    "GradientBoosting": GradientBoostingRegressor(
+        random_state=RANDOM_STATE
+    )
+}
+
+results = {}
+best_name = None
+best_r2 = -1e9
+
+print("\nСравнение моделей (до оптимизации):")
+for name, model in candidates.items():
+    model.fit(X_train, y_train)
+    pred = model.predict(X_test)
+
+    mae = mean_absolute_error(y_test, pred)
+    r2 = r2_score(y_test, pred)
+
+    results[name] = (mae, r2)
+    print(f"{name}: MAE={mae:.3f}, R2={r2:.3f}")
+
+    if r2 > best_r2:
+        best_r2 = r2
+        best_name = name
+
+print("\nЛучшая модель до оптимизации:", best_name)
+
+# =========================
+# 11) ОПТИМИЗАЦИЯ ЛУЧШЕЙ МОДЕЛИ (GridSearchCV)
+# =========================
+if best_name == "RandomForest":
+    base = RandomForestRegressor(random_state=RANDOM_STATE, n_jobs=-1)
+    param_grid = {
+        "n_estimators": [300, 600],
+        "max_depth": [None, 15, 30],
+        "min_samples_split": [2, 5],
+        "min_samples_leaf": [1, 2]
+    }
+else:
+    base = GradientBoostingRegressor(random_state=RANDOM_STATE)
+    param_grid = {
+        "n_estimators": [100, 300],
+        "learning_rate": [0.05, 0.1],
+        "max_depth": [2, 3, 4]
+    }
+
+grid = GridSearchCV(base, param_grid, cv=3, n_jobs=-1)
+grid.fit(X_train, y_train)
+
+best_model = grid.best_estimator_
+best_pred = best_model.predict(X_test)
+
+print("\nЛучшие параметры:", grid.best_params_)
+print("Качество после оптимизации:")
+print("MAE:", mean_absolute_error(y_test, best_pred))
+print("R2:", r2_score(y_test, best_pred))
+
+# =========================
+# 12) ИНТЕРПРЕТАЦИЯ (важность признаков)
+# =========================
+top_feature_importance(best_model, X.columns, top_n=10)
+
+print("\nГотово. Проверьте папку проекта — там будут EDA-графики PNG.")
