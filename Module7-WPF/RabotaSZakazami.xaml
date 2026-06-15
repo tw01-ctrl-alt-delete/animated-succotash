@@ -1,0 +1,49 @@
+﻿    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="2*"/>
+            <ColumnDefinition Width="1*"/>
+        </Grid.ColumnDefinitions>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="55"/>
+            <RowDefinition Height="55"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="20"/>
+            <RowDefinition Height="20"/>
+        </Grid.RowDefinitions>
+        <StackPanel Orientation="Horizontal">
+            <Label Content="Выберите заказчика" Margin="5"/>
+            <ComboBox Name="CBZakazchik" Width="150" Margin="5"/>
+            <Button x:Name="BTNFiltr" Content="Фильтровать" Width="110" Margin="5"/>
+            <Button x:Name="BTNSbrosFiltr" Content="Показать все" Width="110" Margin="5" />
+        </StackPanel>
+        <StackPanel Grid.Column="1" Grid.RowSpan="2">
+            <Label Content="Выберите поле для сортировки" Margin="5"/>
+            <StackPanel Orientation="Horizontal">
+                <ListBox Name="lbSort" Margin="5">
+                    <ListBoxItem Content="Заказчик"/>
+                    <ListBoxItem Content="Дата заказа"/>
+                    <ListBoxItem Content="Сумма заказа"/>
+                </ListBox>
+                <StackPanel Margin="5">
+                    <RadioButton x:Name="rbSortVozr" Content="По возрастанию" GroupName="SortDirection" IsChecked="True"/>
+                    <RadioButton x:Name="rbSortUb" Content="По убыванию" GroupName="SortDirection"/>
+                </StackPanel>
+            </StackPanel>
+        </StackPanel>
+        <StackPanel Orientation="Horizontal" Grid.Row="1">
+            <TextBlock Text="Введите строку поиска" Margin="5"/>
+            <TextBox x:Name="TBSearch" Width="200" Margin="5"/>
+            <Button x:Name="BTNSearch" Content="Найти" Width="150" Margin="5"/>
+        </StackPanel>
+        <DataGrid Name="DGOrders"  Grid.Row="2" Grid.ColumnSpan="2" AutoGenerateColumns="False" IsReadOnly="True">
+            <DataGrid.Columns>
+                <DataGridTextColumn Header="Заказчик" Binding="{Binding Customers.CustomerName}"  Width="*"/>
+                <DataGridTextColumn Header="Город" Width="*" Binding="{Binding Customers.Address}"/>
+                <DataGridTextColumn Header="Телефон" Width="*" Binding="{Binding Customers.Phone}"/>
+                <DataGridTextColumn Header="Дата заказа" Width="*" Binding="{Binding OrderDate}"/>
+                <DataGridTextColumn Header="Сумма заказа" Width="*" Binding="{Binding TotalAmount}"/>
+            </DataGrid.Columns>
+        </DataGrid>
+        <TextBlock Grid.Row="3" x:Name="tbOrdersCount" Text="Всего заказов: 0" />
+        <TextBlock Grid.Row="4" x:Name="tbTotalSum" Text="Общая сумма: 0,00" />
+    </Grid>
